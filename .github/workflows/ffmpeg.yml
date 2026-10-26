@@ -1,0 +1,150 @@
+name: Build FFmpeg (video tool)
+
+# A small FFmpeg for the AI add-on's video scanning: it only reads trail-camera video and writes JPEG frames.
+# LGPL only (no --enable-gpl, no --enable-nonfree), no external libraries, one program per platform.
+# Run it by hand (Actions → Build FFmpeg → Run workflow).
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FFMPEG_VERSION: '9.0.2'
+  # FFmpeg's release signing key, as published on https://ffmpeg.org/download.html
+  FFMPEG_KEY: 'FCF986EA15E6E293A5644F10B4322F04D67658D8'
+  # Only what TRAAACE needs: read mp4/mov/avi/mkv, decode the usual camera video formats, write JPEG frames.
+  CONFIGURE_FLAGS: >-
+    --disable-everything --disable-autodetect --disable-network --disable-doc --disable-debug
+    --disable-ffplay --disable-ffprobe --disable-avdevice --enable-ffmpeg --enable-small
+    --enable-protocol=file,pipe
+    --enable-demuxer=mov,avi,matroska
+    --enable-decoder=h264,hevc,mpeg4,h263,mjpeg,mpeg2video,vp8,vp9
+    --enable-parser=h264,hevc,mpeg4video,h263,mjpeg,mpegvideo,vp8,vp9
+    --enable-encoder=mjpeg
+    --enable-muxer=image2pipe
+    --enable-filter=scale,format,null
+
+jobs:
+  source:
+    name: Download and verify the source
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download FFmpeg ${{ env.FFMPEG_VERSION }} and check its signature
+        run: |
+          set -euo pipefail
+          curl -fsSLO "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz"
+          curl -fsSLO "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz.asc"
+          curl -fsSL https://ffmpeg.org/ffmpeg-devel.asc | gpg --import
+          gpg --fingerprint "$FFMPEG_KEY"
+          gpg --status-fd 1 --verify "ffmpeg-${FFMPEG_VERSION}.tar.xz.asc" "ffmpeg-${FFMPEG_VERSION}.tar.xz" | tee verify.txt
+          grep -q "VALIDSIG $FFMPEG_KEY" verify.txt
+          sha256sum "ffmpeg-${FFMPEG_VERSION}.tar.xz" | tee source.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-source
+          path: |
+            ffmpeg-${{ env.FFMPEG_VERSION }}.tar.xz
+            source.sha256
+
+  build:
+    name: Build (${{ matrix.name }})
+    needs: source
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-aarch64
+            os: macos-latest
+            exe: ffmpeg
+          - name: macos-x86_64
+            os: macos-15-intel
+            exe: ffmpeg
+          - name: linux-x86_64
+            os: ubuntu-24.04
+            exe: ffmpeg
+            extra: --extra-ldflags=-static --pkg-config-flags=--static
+          - name: windows-x86_64
+            os: ubuntu-24.04
+            exe: ffmpeg.exe
+            extra: --target-os=mingw32 --arch=x86_64 --cross-prefix=x86_64-w64-mingw32- --extra-ldflags=-static
+    runs-on: ${{ matrix.os }}
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '11.0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ffmpeg-source
+      - name: Tools
+        run: |
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            sudo apt-get update
+            sudo apt-get install -y nasm
+            if [ "${{ matrix.name }}" = "windows-x86_64" ]; then sudo apt-get install -y mingw-w64; fi
+          else
+            brew install nasm
+          fi
+      - name: Configure and build
+        run: |
+          set -euo pipefail
+          tar -xf "ffmpeg-${FFMPEG_VERSION}.tar.xz"
+          cd "ffmpeg-${FFMPEG_VERSION}"
+          ./configure --prefix="$PWD/out" $CONFIGURE_FLAGS ${{ matrix.extra }}
+          make -j4
+          # Refuse anything that is not LGPL.
+          grep -q '#define CONFIG_GPL 0' config.h
+          grep -q '#define CONFIG_NONFREE 0' config.h
+      - name: Test on the sample clips
+        if: matrix.name != 'windows-x86_64'
+        run: |
+          set -euo pipefail
+          FF="ffmpeg-${FFMPEG_VERSION}/${{ matrix.exe }}"
+          for clip in test/h264.mp4 test/hevc.mp4 test/mjpeg.avi; do
+            "$FF" -hide_banner -i "$clip" 2>&1 | grep -q "Duration: 00:00:01" || { echo "no duration for $clip"; exit 1; }
+            # The exact command TRAAACE uses to grab a frame.
+            "$FF" -hide_banner -loglevel error -ss 0.500 -i "$clip" -frames:v 1 -f image2pipe -c:v mjpeg -q:v 2 - > frame.jpg
+            [ -s frame.jpg ] || { echo "no frame from $clip"; exit 1; }
+            echo "$clip OK ($(wc -c < frame.jpg) bytes)"
+          done
+      - name: Package
+        run: |
+          set -euo pipefail
+          SRC="ffmpeg-${FFMPEG_VERSION}"
+          mkdir -p "pkg/ffmpeg-${{ matrix.name }}"
+          cp "$SRC/${{ matrix.exe }}" "pkg/ffmpeg-${{ matrix.name }}/"
+          cp "$SRC/COPYING.LGPLv2.1" "pkg/ffmpeg-${{ matrix.name }}/LICENSE.txt"
+          {
+            echo "FFmpeg ${FFMPEG_VERSION}, LGPL v2.1 or later, built for the TRAAACE AI add-on."
+            echo "Source: https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz"
+            echo "Source SHA-256: $(cut -d' ' -f1 source.sha256)"
+            echo "Signature checked against FFmpeg's release key ${FFMPEG_KEY}."
+            echo "Built by: https://github.com/${{ github.repository }}/blob/${{ github.sha }}/.github/workflows/ffmpeg.yml"
+            echo "Configure flags: ${CONFIGURE_FLAGS} ${{ matrix.extra }}"
+          } > "pkg/ffmpeg-${{ matrix.name }}/SOURCE.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-${{ matrix.name }}
+          path: pkg/ffmpeg-${{ matrix.name }}
+
+  test-windows:
+    name: Test (windows-x86_64)
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ffmpeg-windows-x86_64
+          path: ff
+      - name: Test on the sample clips
+        shell: bash
+        run: |
+          set -euo pipefail
+          for clip in test/h264.mp4 test/hevc.mp4 test/mjpeg.avi; do
+            ff/ffmpeg.exe -hide_banner -i "$clip" 2>&1 | grep -q "Duration: 00:00:01" || { echo "no duration for $clip"; exit 1; }
+            ff/ffmpeg.exe -hide_banner -loglevel error -ss 0.500 -i "$clip" -frames:v 1 -f image2pipe -c:v mjpeg -q:v 2 - > frame.jpg
+            [ -s frame.jpg ] || { echo "no frame from $clip"; exit 1; }
+            echo "$clip OK ($(wc -c < frame.jpg) bytes)"
+          done
