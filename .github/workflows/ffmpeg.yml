@@ -102,7 +102,9 @@ jobs:
           set -euo pipefail
           FF="ffmpeg-${FFMPEG_VERSION}/${{ matrix.exe }}"
           for clip in test/h264.mp4 test/hevc.mp4 test/mjpeg.avi; do
-            "$FF" -hide_banner -i "$clip" 2>&1 | grep -q "Duration: 00:00:01" || { echo "no duration for $clip"; exit 1; }
+            # With no output file ffmpeg prints the clip's details and exits with an error; that is expected.
+            info=$("$FF" -hide_banner -i "$clip" 2>&1 || true)
+            grep -q "Duration: 00:00:01" <<<"$info" || { echo "no duration for $clip"; echo "$info"; exit 1; }
             # The exact command TRAAACE uses to grab a frame.
             "$FF" -hide_banner -loglevel error -ss 0.500 -i "$clip" -frames:v 1 -f image2pipe -c:v mjpeg -q:v 2 - > frame.jpg
             [ -s frame.jpg ] || { echo "no frame from $clip"; exit 1; }
@@ -143,7 +145,8 @@ jobs:
         run: |
           set -euo pipefail
           for clip in test/h264.mp4 test/hevc.mp4 test/mjpeg.avi; do
-            ff/ffmpeg.exe -hide_banner -i "$clip" 2>&1 | grep -q "Duration: 00:00:01" || { echo "no duration for $clip"; exit 1; }
+            info=$(ff/ffmpeg.exe -hide_banner -i "$clip" 2>&1 || true)
+            grep -q "Duration: 00:00:01" <<<"$info" || { echo "no duration for $clip"; echo "$info"; exit 1; }
             ff/ffmpeg.exe -hide_banner -loglevel error -ss 0.500 -i "$clip" -frames:v 1 -f image2pipe -c:v mjpeg -q:v 2 - > frame.jpg
             [ -s frame.jpg ] || { echo "no frame from $clip"; exit 1; }
             echo "$clip OK ($(wc -c < frame.jpg) bytes)"
