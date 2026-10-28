@@ -1,15 +1,21 @@
 # TRAAACE AI add-on
 
-Downloads for the optional AI add-on in [TRAAACE](https://traaace.ing). The app downloads and checks these files itself;
-you don't need to get anything from here by hand.
+Downloads for the optional AI add-on in [TRAAACE](https://traaace.ing/).  
+The app downloads and checks these files itself; you don't need to get anything from here by hand.
 
 ## Credits
 
-- **Alita** (New Zealand species classifier, version 3.03) by Olly and wekaResearch, with the Department of Conservation
-  Predator Science team. Everyone involved is listed at https://github.com/Wologman/Alita. Hosted here with Olly's permission.
+- **Alita** (New Zealand species classifier, version 3.03) by Olly and wekaResearch, with the Department of Conservation Predator Science team.  
+
+  Everyone involved is listed at https://github.com/Wologman/Alita.   
+
+  Hosted here with Olly's permission.
+
 - **MegaDetector v5a** (animal detection) by Dan Morris and contributors: https://github.com/agentmorris/MegaDetector
+
 - **ONNX Runtime** by Microsoft: https://github.com/microsoft/onnxruntime
-- **FFmpeg** (video tool): https://ffmpeg.org
+
+- **FFmpeg** (video tool): [https://ffmpeg.org](https://ffmpeg.org/)
 
 ## Licences
 
